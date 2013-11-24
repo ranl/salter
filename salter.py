@@ -450,7 +450,9 @@ def go(fn, out=True):
     rets = []
     for stage in data:
         conf = data[stage]
-        conf.update({'cli': out})
+        if not isinstance(conf, dict):
+            conf = {conf: {}}
+        conf[conf.keys()[0]].update({'cli': out})
         if out:
             _printHeader(stage)
         ret = _execStage(stage, conf, functions)
