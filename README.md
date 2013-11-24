@@ -63,6 +63,7 @@ Why do I need this
 this solves the same problems that the state.over runner is solving: ordering states executions
 
 make sure all the minions returned something:
+
 salt publish the commands to the minions in an asynchronous fashion
 so you don't always get the response back from all the minions, depending on how much timeout you've specified.
 when salter publish a state / module the returned data will be crossed reference with the mine system to check that all the minion returned somehing.
