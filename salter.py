@@ -98,6 +98,11 @@ def _checkStateReturn(cmdret, minions):
             if isinstance(cmdret[minion], str):
                 ret['empty'].append(minion)
                 continue
+            elif isinstance(cmdret[minion], list):
+                if not ret['errors'][minion]:
+                    ret['errors'][minion] = []
+                ret['errors'][minion].append(cmdret[minion])
+                continue
             for st in cmdret[minion]:
                 if not cmdret[minion][st]['result']:
                     if not ret['errors'][minion]:
@@ -452,7 +457,7 @@ def go(fn, out=True):
         conf = data[stage]
         if not isinstance(conf, dict):
             conf = {conf: {}}
-        conf[conf.keys()[0]].update({'cli': out})
+        conf[conf.keys()[0]].update({'cli': False})
         if out:
             _printHeader(stage)
         ret = _execStage(stage, conf, functions)
