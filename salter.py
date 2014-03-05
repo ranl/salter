@@ -47,6 +47,10 @@ from salt.exceptions import SaltSystemExit
 # Logger
 log = logging.getLogger(__name__)
 
+# Hack to get yaml rendering to work in a runner context
+setattr(sys.modules['salt.renderers.yaml'], '__salt__', {})
+setattr(sys.modules['salt.renderers.yaml'], '__opts__', {})
+
 
 ###############
 ### Private ###
@@ -64,12 +68,16 @@ def _render(filename):
     '''
     Render a salter file
     '''
-    
-    with open( filename, 'r' ) as f:
-        return salt.renderers.yaml.render(f)
+
+    log.info('rendering file {0}'.format(filename))
+    with open(filename, 'r') as f:
+        ret = salt.renderers.yaml.render(f)
+        log.debug('rendered {0}'.format(filename))
+        log.debug(ret)
+        return ret
 
 
-def _validateNonZeroDiscovery(minions, ret):
+def _validate_nonzero_discovery(minions, ret):
     '''
     Validate that we've discovered at least 1 minion
     '''
@@ -82,7 +90,7 @@ def _validateNonZeroDiscovery(minions, ret):
     return True
 
 
-def _checkStateReturn(cmdret, minions):
+def _check_state_return(cmdret, minions):
     '''
     Parse a return states run on the minion
     '''
@@ -114,16 +122,21 @@ def _checkStateReturn(cmdret, minions):
     return ret
 
 
-def _discoverMinions(tgt, expr_form='glob'):
+def _discover_minions(tgt, expr_form='glob'):
     '''
     Return a set of minion via the mine system
     '''
 
+    log.debug('searching for minions via mine: tgt={0} expr_form={1}'.format(tgt, expr_form))
     minions = salt.client.Caller().sminion.functions['mine.get'](tgt, 'test.ping', expr_form)
-    return list(set(minions.keys()))
+    ret = list(set(minions.keys()))
+    log.info('discovered minions: {0}'.format(ret))
+    if not minions:
+        log.error('discovered 0 minions')
+    return ret
 
 
-def _genValidFunctions():
+def _generate_valid_functions():
     '''
     Return a hashmap of valid salter functions
     '''
@@ -134,10 +147,11 @@ def _genValidFunctions():
                 not key.startswith('_') and \
                 key != 'go':
             ret[key] = globals()[key]
+    log.debug('available functions: {0}'.format(ret))
     return ret
 
 
-def _printHeader(string, color='BLUE', prefix='Executing Stage:'):
+def _print_header(string, color='BLUE', prefix='Executing Stage:'):
     '''
     Print Header
     '''
@@ -161,7 +175,7 @@ def _printHeader(string, color='BLUE', prefix='Executing Stage:'):
     )
 
 
-def _printStage(ret):
+def _print_stage(ret):
     '''
     Print the current stage to the console
     '''
@@ -186,7 +200,7 @@ def _printStage(ret):
     print
 
 
-def _printSummary(rets):
+def _print_summary(rets):
     '''
     Print a small summary in the end of the stages
     '''
@@ -195,7 +209,7 @@ def _printSummary(rets):
     if not rets[-1]['result']:
         color = 'RED_BOLD'
 
-    _printHeader('Salter is done !', color, '')
+    _print_header('Salter is done !', color, '')
     stagesToPrint = '{0}Stages: \n{1}'.format(salt.utils.get_colors()['LIGHT_GREEN'], salt.utils.get_colors()['ENDC'])
     for stage in rets:
         color = salt.utils.get_colors()['LIGHT_GREEN']
@@ -209,7 +223,7 @@ def _printSummary(rets):
     print stagesToPrint
 
 
-def _execStage(stage, conf, functions):
+def _exec_stage(stage, conf, functions):
     '''
     Execute a stage and return it's result
     '''
@@ -222,6 +236,9 @@ def _execStage(stage, conf, functions):
     if funcName in functions:
         origStdOut = sys.stdout
         sys.stdout = _nullOut()
+        log.debug('executing state func={0} stage={1} args={2}'.format(
+            funcName, stage, args
+        ))
         ret = functions[funcName](stage, **args)
         sys.stdout = origStdOut
     else:
@@ -229,30 +246,26 @@ def _execStage(stage, conf, functions):
                'result': False,
                'changes': {},
                'comment': '{0} is not a valid Salter function'.format(funcName)}
+        log.error(ret['comment'])
 
     return ret
 
 
-##############
-### Public ###
-##############
-
-
-def _endFuncFromCli(ret):
+def _end_func_from_cli(ret):
     '''
     When a salter function ends from a cli
     this function deals with printing and exit status
     '''
     
-    _printStage(ret)
+    _print_stage(ret)
     if not ret['result']:
         raise SaltSystemExit('Error')
-
 
 ##############
 ### PUBLIC ###
 ##############
-        
+
+
 def ping(name, tgt, timeout=None, expr_form='glob', cli=True):
     '''
     Make sure all the named minions are connected
@@ -271,15 +284,18 @@ def ping(name, tgt, timeout=None, expr_form='glob', cli=True):
         salt-run salter.ping 'alias name' \* 10
         salt-run salter.ping 'alias name' 'roles:web-server' cmd.run '["service tomcat status"]' expr_form=grain
     '''
-    
+
+    log.info('pinging tgt={0} expr_form={1}'.format(
+        tgt, expr_form
+    ))
     ret = {'name': name,
            'result': True,
            'changes': {},
            'comment': ''}
     
     # discover targeted minions
-    minions = _discoverMinions(tgt, expr_form)
-    _validateNonZeroDiscovery(minions, ret)
+    minions = _discover_minions(tgt, expr_form)
+    _validate_nonzero_discovery(minions, ret)
     if not ret['result']:
         return ret
 
@@ -295,9 +311,10 @@ def ping(name, tgt, timeout=None, expr_form='glob', cli=True):
         ret['result'] = False
         ret['changes']['ping'].update({'dead': no_return})
         ret['comment'] = 'the following minions are dead {0}'.format(no_return)
+        log.error('ping all: {0}'.format(ret['comment']))
 
     if cli:
-        _endFuncFromCli(ret)
+        _end_func_from_cli(ret)
     return ret
 
 
@@ -319,15 +336,18 @@ def module(name, tgt, func, args=[], timeout=None, expr_form='glob', cli=True):
         salt-run salter.module 'alias name' \* cmd.run '["ls -l"]' 10
         salt-run salter.module 'alias name' 'roles:web-server' cmd.run '["service tomcat status"]' expr_form=grain
     '''
-    
+
+    log.info('executing module {0} args={3} on tgt={1} expr_form={2}'.format(
+        name, tgt, expr_form, args
+    ))
     ret = {'name': name,
            'result': True,
            'changes': {},
            'comment': ''}
 
     # discover targeted minions
-    minions = _discoverMinions(tgt, expr_form)
-    if not _validateNonZeroDiscovery(minions, ret):
+    minions = _discover_minions(tgt, expr_form)
+    if not _validate_nonzero_discovery(minions, ret):
         return ret
 
     # execute the module
@@ -340,8 +360,12 @@ def module(name, tgt, func, args=[], timeout=None, expr_form='glob', cli=True):
         ret['result'] = False
         ret['comment'] = 'the following minions did not return: {0}'.format(no_return)
 
+    if not ret['result']:
+        log.error('module {0} failed {1}'.format(name, ret['comment']))
+    log.debug('module {0} result:\n{1}'.format(name, ret['changes']))
+
     if cli:
-        _endFuncFromCli(ret)
+        _end_func_from_cli(ret)
     return ret
 
 
@@ -362,15 +386,16 @@ def state(name, tgt, state, timeout=None, expr_form='glob', cli=True):
         salt-run salter.state 'alias name' \* common 10
         salt-run salter.state 'alias name' 'roles:web-server' tomcat 999 expr_form=grain
     '''
-    
+
+    log.info('applying state {0} on tgt={1} expr_form={2}'.format(name, tgt, expr_form))
     ret = {'name': name,
            'result': True,
            'changes': {},
            'comment': ''}
 
     # discover targeted minions
-    minions = _discoverMinions(tgt, expr_form)
-    if not _validateNonZeroDiscovery(minions, ret):
+    minions = _discover_minions(tgt, expr_form)
+    if not _validate_nonzero_discovery(minions, ret):
         return ret
 
     # apply the state
@@ -379,7 +404,7 @@ def state(name, tgt, state, timeout=None, expr_form='glob', cli=True):
     ret['comment'] = ''
 
     # verify that all the minion returned and all is True
-    ret_err  =_checkStateReturn(cmdret, minions)
+    ret_err  =_check_state_return(cmdret, minions)
 
     if ret_err['errors']:
         ret['result'] = False
@@ -398,8 +423,11 @@ def state(name, tgt, state, timeout=None, expr_form='glob', cli=True):
             ret['comment'] += '\n'
         ret['comment'] += 'the following minions did not return: {0}'.format(ret_err['no_returns'])
 
+    if not ret['result']:
+        log.error('state {0} failed {1}'.format(name, ret['comment']))
+    log.debug('state {0} result:\n{1}'.format(name, ret['changes']))
     if cli:
-        _endFuncFromCli(ret)
+        _end_func_from_cli(ret)
     return ret
 
   
@@ -426,17 +454,19 @@ def winrepo_genrepo(name, cli=True):
 
     pillar = salt.client.Caller().sminion.functions['pillar.data']()
     runner = salt.runner.RunnerClient(pillar['master'])
+    log.info('generating windows package repository')
     ret['changes'] = {'winrepo': runner.cmd('winrepo.genrepo', [])}
     if not ret['changes']:
         ret['result'] = False
         ret['comment'] = 'winrepo returned empty !'
+        log.error(ret['comment'])
 
     if cli:
-        _endFuncFromCli(ret)
+        _end_func_from_cli(ret)
     return ret
 
 
-def go(fn, out=True):
+def go(fn, out=True, cli=True):
     '''
     Execute the salter file
     
@@ -448,10 +478,11 @@ def go(fn, out=True):
         salt-run salter.go /path/to/file.salter False
     '''
     
-    functions = _genValidFunctions()
+    functions = _generate_valid_functions()
     data = _render(fn)
     error = False
-    
+
+    log.info('begin executing salter file {0}'.format(fn))
     rets = []
     for stage in data:
         conf = data[stage]
@@ -459,18 +490,22 @@ def go(fn, out=True):
             conf = {conf: {}}
         conf[conf.keys()[0]].update({'cli': False})
         if out:
-            _printHeader(stage)
-        ret = _execStage(stage, conf, functions)
+            _print_header(stage)
+        log.info('executing stage {0}'.format(stage))
+        ret = _exec_stage(stage, conf, functions)
+        log.debug('{0} execution result: {1}'.format(stage, ret))
         if out:
-            _printStage(ret)
+            _print_stage(ret)
         rets.append(ret)
         if not ret['result']:
+            log.error('stage {0} had an error'.format(stage))
+            log.debug(ret)
             error = True
             break
-    
+
     if out:
-        _printSummary(rets)
-    if error:
+        _print_summary(rets)
+    if error and cli:
         raise SaltSystemExit('Error')
     
     return rets
